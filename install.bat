@@ -6,37 +6,61 @@ cd /d "%~dp0"
 title Установка модуля учета отпусков
 
 set "ERRFILE=%TEMP%\otpusk_install_err.txt"
+set "SQLOUT=%TEMP%\otpusk_install_sql.txt"
 set "CERTFLAG="
 set "CODEPAGE_FLAG="
 set "SQLCMD="
 
 echo.
 echo =================================================
-echo   Модуль учета отпусков: установка базы данных
+echo   Модуль учета отпусков: установка
 echo =================================================
 echo.
 
-rem --- поиск sqlcmd ---
+rem --- 1. сборка программы, если ее еще нет ---
+if not exist "build\otpusk.exe" (
+    echo [1/3] Программа еще не собрана. Запускаю build.bat...
+    call "%~dp0build.bat" quiet
+    if errorlevel 1 (
+        echo.
+        echo Не удалось собрать программу. Установите Visual Studio 2022
+        echo с компонентом "Разработка классических приложений на C++"
+        echo и запустите install.bat снова.
+        goto :fail
+    )
+) else (
+    echo [1/3] Собранная программа найдена: build\otpusk.exe
+)
+
+rem --- 2. поиск sqlcmd ---
 for %%C in (sqlcmd.exe) do if not defined SQLCMD set "SQLCMD=%%~$PATH:C"
 if not defined SQLCMD if exist "%ProgramFiles%\Microsoft SQL Server\Client SDK\ODBC\170\Tools\Binn\SQLCMD.EXE" set "SQLCMD=%ProgramFiles%\Microsoft SQL Server\Client SDK\ODBC\170\Tools\Binn\SQLCMD.EXE"
 if not defined SQLCMD if exist "%ProgramFiles%\Microsoft SQL Server\Client SDK\ODBC\180\Tools\Binn\SQLCMD.EXE" set "SQLCMD=%ProgramFiles%\Microsoft SQL Server\Client SDK\ODBC\180\Tools\Binn\SQLCMD.EXE"
-for %%V in (150 160 170 180) do (
+for %%V in (130 140 150 160 170 180) do (
     if not defined SQLCMD if exist "%ProgramFiles%\Microsoft SQL Server\%%V\Tools\Binn\SQLCMD.EXE" set "SQLCMD=%ProgramFiles%\Microsoft SQL Server\%%V\Tools\Binn\SQLCMD.EXE"
     if not defined SQLCMD if exist "%ProgramFiles(x86)%\Microsoft SQL Server\%%V\Tools\Binn\SQLCMD.EXE" set "SQLCMD=%ProgramFiles(x86)%\Microsoft SQL Server\%%V\Tools\Binn\SQLCMD.EXE"
 )
 if not defined SQLCMD goto :no_sqlcmd
-echo   sqlcmd найден.
+echo   sqlcmd найден: %SQLCMD%
 
 rem --- поддержка UTF-8 в sqlcmd (старые версии ее не знают) ---
 "%SQLCMD%" -? 2>&1 | findstr /i /c:"codepage" >nul
 if not errorlevel 1 set "CODEPAGE_FLAG=-f 65001"
 
-reg query "HKLM\SOFTWARE\ODBC\ODBCINST.INI\ODBC Drivers" /v "ODBC Driver 17 for SQL Server" >nul 2>&1
-if errorlevel 1 (
-    echo   [ВНИМАНИЕ] ODBC Driver 17 for SQL Server не найден.
-    echo              Он нужен для запуска самой программы.
+rem --- 3. проверка драйвера ODBC ---
+set "ODBC="
+for %%D in ("ODBC Driver 18 for SQL Server" "ODBC Driver 17 for SQL Server" "ODBC Driver 13 for SQL Server" "SQL Server") do (
+    if not defined ODBC (
+        reg query "HKLM\SOFTWARE\ODBC\ODBCINST.INI\ODBC Drivers" /v %%D >nul 2>&1
+        if not errorlevel 1 set "ODBC=%%~D"
+    )
+)
+if not defined ODBC (
+    echo   [ВНИМАНИЕ] Драйвер ODBC для SQL Server не найден.
+    echo              Установите "ODBC Driver 17 for SQL Server" или версию 18,
+    echo              иначе программа не сможет подключиться к базе.
 ) else (
-    echo   ODBC Driver 17 for SQL Server найден.
+    echo   Драйвер ODBC найден: %ODBC%
 )
 
 rem --- обязательные файлы ---
@@ -80,6 +104,7 @@ goto :ask_server
 echo   Подключение установлено.
 
 > "server.txt" echo(%SERVER%
+if exist "build" > "build\server.txt" echo(%SERVER%
 echo   Имя сервера сохранено в server.txt.
 
 echo.
@@ -97,15 +122,14 @@ goto :done
 
 :install
 echo.
-echo [1/4] Создание базы данных...
+echo [2/3] Создание базы данных...
 call :runsql "%SQL01%" || goto :fail
-echo [2/4] Роли базы данных...
+echo   Роли базы данных...
 call :runsql "%SQL04%" || goto :fail
-echo [3/4] Журнал аудита и триггеры...
+echo   Журнал аудита и триггеры...
 call :runsql "%SQL05%" || goto :fail
-echo [4/4] Пользователи программы...
+echo   Пользователи программы...
 call :runsql "%SQL07%" || goto :fail
-echo.
 echo Обязательные скрипты выполнены.
 
 echo.
@@ -123,11 +147,11 @@ echo Демонстрационные данные добавлены.
 
 :tests
 echo.
+echo [3/3] Проверка программы...
 if not exist "build\proverka.exe" (
     echo Автотесты не запущены: build\proverka.exe не найден.
     goto :launch
 )
-echo Запуск автотестов...
 "build\proverka.exe"
 if errorlevel 1 (
     echo [ВНИМАНИЕ] В автотестах есть ошибки, подробности выше.
@@ -145,12 +169,19 @@ if /i "%ANSWER%"=="yes" goto :run
 if /i "%ANSWER%"=="д" goto :run
 goto :done
 :run
-start "Модуль учета отпусков" "build\otpusk.exe"
+echo.
+"build\otpusk.exe"
+if errorlevel 1 (
+    echo.
+    echo Программа завершилась с ошибкой. Проверьте имя сервера в server.txt
+    echo и журнал zhurnal_programmy.txt.
+)
 goto :done
 
 :done
 echo.
 echo Установка завершена.
+echo Запустить программу позже можно через run.bat или build\otpusk.exe
 if defined OLDCP chcp %OLDCP% >nul
 pause
 exit /b 0
@@ -165,8 +196,11 @@ exit /b 1
 :no_sqlcmd
 echo.
 echo [ОШИБКА] Не найден sqlcmd.exe.
-echo Установите SQL Server Management Studio или пакет "sqlcmd",
-echo либо выполните скрипты из папки sql вручную (см. README.txt).
+echo.
+echo Установите SQL Server Management Studio или пакет SQL Server Command Line Utilities.
+echo Можно также выполнить скрипты из папки sql вручную в SSMS:
+echo   01_sozdanie_bazy.sql, 04_roli.sql, 05_audit.sql, 07_polzovateli.sql
+echo Подробности есть в README.md.
 goto :fail
 
 :no_files
@@ -176,9 +210,10 @@ goto :fail
 
 :runsql
 echo   Скрипт %~nx1 ...
-"%SQLCMD%" -S "%SERVER%" -E %CERTFLAG% -d master %CODEPAGE_FLAG% -l 30 -b -i "%~1" >nul
+"%SQLCMD%" -S "%SERVER%" -E %CERTFLAG% -d master %CODEPAGE_FLAG% -l 30 -b -i "%~1" >"%SQLOUT%" 2>&1
 if errorlevel 1 (
-    echo [ОШИБКА] Скрипт %~nx1 завершился с ошибкой. Сообщение SQL Server выше.
+    echo [ОШИБКА] Скрипт %~nx1 завершился с ошибкой:
+    type "%SQLOUT%"
     exit /b 1
 )
 exit /b 0

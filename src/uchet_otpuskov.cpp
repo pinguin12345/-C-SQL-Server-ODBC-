@@ -25,13 +25,13 @@ std::string slishkomDlinno(const std::string& chto, std::size_t predel) {
     return chto + " длиннее " + std::to_string(predel) + " символов.";
 }
 
-// Отрезки [nach1, kon1] и [nach2, kon2] пересекаются, если каждый начинается не позже конца другого.
+
 bool datiPeresekayutsya(const std::string& nach1, const std::string& kon1,
                         const std::string& nach2, const std::string& kon2) {
     return dataNePozdnee(nach1, kon2) && dataNePozdnee(nach2, kon1);
 }
 
-} // namespace
+}
 
 UchetOtpuskov::UchetOtpuskov(Hranilishche& hranilishche, Rol rol)
     : hranilishche_(hranilishche), rol_(rol) {}
@@ -186,8 +186,9 @@ std::string UchetOtpuskov::oformitOtpusk(int sotrId, const std::string& nach,
     int dney = skolkoDney(nach, kon);
     if (dney < 0) prichina = "Даты неверные или конец раньше начала.";
     if (prichina.empty()) prichina = proveritProshluyuDatu(kon);
-    if (prichina.empty()) prichina = pochemuNelzya(sotrId, dney);
+    // Пересечение проверяем раньше остатка: это более точная причина отказа.
     if (prichina.empty()) prichina = proveritPeresechenie(sotrId, nach, kon, 0);
+    if (prichina.empty()) prichina = pochemuNelzya(sotrId, dney);
     if (!prichina.empty()) {
         logStroka("Отказ в отпуске: " + prichina);
         return prichina;

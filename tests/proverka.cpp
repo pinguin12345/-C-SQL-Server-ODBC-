@@ -5,7 +5,7 @@
 #include <iostream>
 #include <windows.h>
 
-// --- Мини-фреймворк для тестов (вместо самописного zhdu) ---
+
 static int vsego_testov = 0;
 static int oshibok = 0;
 
@@ -96,7 +96,7 @@ void test_dates() {
     CHECK_EQ(skolkoDney("01.06.2027", "14.06.2027"), 14);
     CHECK_EQ(skolkoDney("01.01.2027", "01.01.2027"), 1);
     CHECK_EQ(skolkoDney("10.01.2027", "01.01.2027"), -1);
-    CHECK_EQ(skolkoDney("29.02.2024", "01.03.2024"), 2); // високосный
+    CHECK_EQ(skolkoDney("29.02.2024", "01.03.2024"), 2); 
     CHECK_EQ(skolkoDney("01.01.2027", "31.12.2027"), 365);
     CHECK_EQ(skolkoDney("31.12.2026", "01.01.2027"), 2);
 
@@ -105,7 +105,7 @@ void test_dates() {
     CHECK(dataHoroshaya("01.01.2101"));
     CHECK(dataHoroshaya("01.01.1900"));
     CHECK(!dataHoroshaya("31.02.2027"));
-    CHECK(!dataHoroshaya("29.02.2100")); // невисокосный век
+    CHECK(!dataHoroshaya("29.02.2100"));
     CHECK(!dataHoroshaya("31.04.2027"));
     CHECK(!dataHoroshaya("00.06.2027"));
     CHECK(!dataHoroshaya("01.00.2027"));
@@ -141,7 +141,7 @@ void test_prodlenie_i_udalenie(UchetOtpuskov& uchet, PamyatHranilishche& baza) {
     Otpusk prodl;
     CHECK(!uchet.prodlenieOtpuska(3, "31.02.2027", prodl).empty()); // неверная дата
     CHECK_EQ(uchet.prodlenieOtpuska(99, "20.07.2027", prodl), "Такого отпуска нет.");
-    CHECK(uchet.prodlenieOtpuska(4, "25.07.2027", prodl).empty()); // успех
+    CHECK(uchet.prodlenieOtpuska(3, "25.07.2027", prodl).empty()); // успех
     CHECK_EQ(prodl.dney, 11);
     CHECK_EQ(baza.izmeneniy, 1);
 
@@ -155,8 +155,8 @@ void test_oshibki_bd(UchetOtpuskov& uchet, PamyatHranilishche& baza) {
     std::cout << "Ошибки БД:\n";
     baza.lomat = true;
     Otpusk prodl;
-    CHECK(!uchet.prodlenieOtpuska(2, "28.07.2027", prodl).empty()); // ошибка
-    CHECK_EQ(uchet.otpuska().back().dataKon, "20.07.2027"); // память не изменилась
+    CHECK(!uchet.prodlenieOtpuska(3, "26.07.2027", prodl).empty()); // ошибка
+    CHECK_EQ(uchet.otpuska().back().dataKon, "25.07.2027"); // память не изменилась
 
     std::size_t bylo = uchet.otdely().size();
     Otdel otdel;
@@ -170,14 +170,18 @@ void test_roles() {
     std::cout << "Роли и пароли:\n";
     CHECK_EQ(heshParolya("admin123"), "240BE518FABD2724DDB6F04EEB1DA5967448D7E831C08C8FA822809F74C720A9");
 
-    PamyatHranilishche baza;
-    baza.otdely = {{1, "Бухгалтерия"}};
-    baza.sotrudniki = {{1, "Иванов", "1001", 1, 28}};
-    baza.otpuska = {{1, "01.03.2020", "14.03.2020", 1, 14}};
-    baza.polzovateli = {{1, "admin", Rol::Admin}};
+    auto sdelatBazu = [] {
+        PamyatHranilishche b;
+        b.otdely = {{1, "Бухгалтерия"}};
+        b.sotrudniki = {{1, "Иванов", "1001", 1, 28}};
+        b.otpuska = {{1, "01.03.2020", "14.03.2020", 1, 14}};
+        b.polzovateli = {{1, "admin", Rol::Admin}};
+        return b;
+    };
 
     // Сотрудник
-    UchetOtpuskov sotrudnik(baza, Rol::Sotrudnik);
+    PamyatHranilishche bazaSotr = sdelatBazu();
+    UchetOtpuskov sotrudnik(bazaSotr, Rol::Sotrudnik);
     sotrudnik.zagruzit();
     CHECK(!sotrudnik.mozhnoPisat());
     Otpusk otp;
@@ -185,16 +189,18 @@ void test_roles() {
              "Роль «сотрудник» может только смотреть списки.");
 
     // Кадровик
-    UchetOtpuskov kadrovik(baza, Rol::Kadrovik);
+    PamyatHranilishche bazaKadr = sdelatBazu();
+    UchetOtpuskov kadrovik(bazaKadr, Rol::Kadrovik);
     kadrovik.zagruzit();
     CHECK(kadrovik.mozhnoPisat());
     CHECK(kadrovik.oformitOtpusk(1, "01.03.2030", "14.03.2030", otp).empty()); // будущий можно
     CHECK(!kadrovik.oformitOtpusk(1, "01.03.2020", "14.03.2020", otp).empty()); // прошедший нельзя
 
     // Админ
-    UchetOtpuskov admin(baza, Rol::Admin);
+    PamyatHranilishche bazaAdmin = sdelatBazu();
+    UchetOtpuskov admin(bazaAdmin, Rol::Admin);
     admin.zagruzit();
-    CHECK(admin.oformitOtpusk(1, "01.03.2020", "14.03.2020", otp).empty()); // прошедший можно
+    CHECK(admin.oformitOtpusk(1, "01.04.2020", "14.04.2020", otp).empty()); // прошедший можно
 }
 
 int main() {
@@ -207,7 +213,7 @@ int main() {
     // Общая база для тестов учета
     PamyatHranilishche baza;
     baza.otdely = {{1, "Бухгалтерия"}, {2, "Отдел продаж"}};
-    baza.sotrudniki = {{1, "Иванов", "1001", 1, 28}, {2, "Петрова", "1002", 2, 28}};
+    baza.sotrudniki = {{1, "Иванов", "1001", 1, 28}, {2, "Петрова", "1002", 2, 40}};
     baza.otpuska = {{1, "01.06.2027", "14.06.2027", 2, 14}};
 
     UchetOtpuskov uchet(baza, Rol::Admin);

@@ -6,8 +6,7 @@
 
 namespace {
 
-// Один SQL-оператор. Дескриптор освобождается в деструкторе,
-// поэтому при любом выходе из функции утечки нет.
+
 class Operator {
 public:
     explicit Operator(SQLHDBC soedinenie) {
@@ -56,6 +55,48 @@ bool estStroka(SQLRETURN kod) {
     return kod == SQL_SUCCESS || kod == SQL_SUCCESS_WITH_INFO;
 }
 
+// Порядок важен: на новых компьютерах чаще стоит драйвер 18, на старых - 17.
+const wchar_t* const kDraivery[] = {
+    L"ODBC Driver 18 for SQL Server",
+    L"ODBC Driver 17 for SQL Server",
+    L"ODBC Driver 13 for SQL Server",
+    L"SQL Server"
+};
+
+// IM002 - драйвер не установлен. Остальные ошибки (нет базы, нет сервера,
+// неверная учетная запись) означают, что другой драйвер уже не поможет.
+bool draiverNeUstanovlen(SQLHDBC soedinenie) {
+    SQLWCHAR sostoyanie[8] = {};
+    SQLINTEGER nomer = 0;
+    SQLSMALLINT dlina = 0;
+    if (!estStroka(SQLGetDiagRecW(SQL_HANDLE_DBC, soedinenie, 1, sostoyanie, &nomer,
+                                  nullptr, 0, &dlina))) {
+        return false;
+    }
+    return std::wstring(sostoyanie) == L"IM002";
+}
+
+std::string papkaProgrammy() {
+    wchar_t put[MAX_PATH];
+    DWORD dlina = GetModuleFileNameW(nullptr, put, MAX_PATH);
+    if (dlina == 0 || dlina == MAX_PATH) return "";
+    std::wstring polnyi(put, dlina);
+    std::size_t pos = polnyi.find_last_of(L"\\/");
+    if (pos == std::wstring::npos) return "";
+    return vUtf8(polnyi.substr(0, pos));
+}
+
+std::string serverIzFaila(const std::string& imya) {
+    std::ifstream fail(imya);
+    std::string stroka;
+    if (!std::getline(fail, stroka)) return "";
+    if (stroka.rfind("\xEF\xBB\xBF", 0) == 0) stroka.erase(0, 3);
+    while (!stroka.empty() && (stroka.back() == '\r' || stroka.back() == ' ')) stroka.pop_back();
+    while (!stroka.empty() && stroka.front() == ' ') stroka.erase(0, 1);
+    if (stroka.empty() || stroka.find(';') != std::string::npos) return "";
+    return stroka;
+}
+
 } // namespace
 
 SqlHranilishche::~SqlHranilishche() {
@@ -89,32 +130,49 @@ bool SqlHranilishche::podklyuchit(const std::string& server) {
     }
     if (!proverit(SQLSetEnvAttr(okruzhenie_, SQL_ATTR_ODBC_VERSION,
                                 reinterpret_cast<SQLPOINTER>(SQL_OV_ODBC3), 0),
-                  SQL_HANDLE_ENV, okruzhenie_, "настройка ODBC")
-        || !proverit(SQLAllocHandle(SQL_HANDLE_DBC, okruzhenie_, &soedinenie_),
-                     SQL_HANDLE_ENV, okruzhenie_, "создание соединения")) {
-        otklyuchit();
-        return false;
-    }
-    if (!proverit(SQLSetConnectAttr(soedinenie_, SQL_ATTR_LOGIN_TIMEOUT,
-                                    reinterpret_cast<SQLPOINTER>(5), SQL_IS_UINTEGER),
-                  SQL_HANDLE_DBC, soedinenie_, "время подключения")) {
+                  SQL_HANDLE_ENV, okruzhenie_, "настройка ODBC")) {
         otklyuchit();
         return false;
     }
 
-    std::wstring stroka = L"Driver={ODBC Driver 17 for SQL Server};Server=" + vShirokuyu(server)
-        + L";Database=OtpuskKompanii;Trusted_Connection=yes;";
-    if (!proverit(SQLDriverConnectW(soedinenie_, nullptr,
-                                    reinterpret_cast<SQLWCHAR*>(stroka.data()), SQL_NTS,
-                                    nullptr, 0, nullptr, SQL_DRIVER_NOPROMPT),
-                  SQL_HANDLE_DBC, soedinenie_, "вход в базу")) {
-        otklyuchit();
-        return false;
+    const std::wstring shirokiyServer = vShirokuyu(server);
+    for (const wchar_t* draiver : kDraivery) {
+        if (soedinenie_ != SQL_NULL_HDBC) {
+            SQLFreeHandle(SQL_HANDLE_DBC, soedinenie_);
+            soedinenie_ = SQL_NULL_HDBC;
+        }
+        if (!proverit(SQLAllocHandle(SQL_HANDLE_DBC, okruzhenie_, &soedinenie_),
+                      SQL_HANDLE_ENV, okruzhenie_, "создание соединения")
+            || !proverit(SQLSetConnectAttr(soedinenie_, SQL_ATTR_LOGIN_TIMEOUT,
+                                           reinterpret_cast<SQLPOINTER>(5), SQL_IS_UINTEGER),
+                         SQL_HANDLE_DBC, soedinenie_, "время подключения")) {
+            otklyuchit();
+            return false;
+        }
+
+        std::wstring stroka = L"Driver={" + std::wstring(draiver) + L"};Server="
+            + shirokiyServer + L";Database=OtpuskKompanii;Trusted_Connection=yes;";
+        // Драйвер 18 по умолчанию требует шифрование и проверку сертификата.
+        if (std::wstring(draiver).find(L"18") != std::wstring::npos) {
+            stroka += L"Encrypt=no;TrustServerCertificate=yes;";
+        }
+
+        SQLRETURN kod = SQLDriverConnectW(soedinenie_, nullptr,
+                                          reinterpret_cast<SQLWCHAR*>(stroka.data()), SQL_NTS,
+                                          nullptr, 0, nullptr, SQL_DRIVER_NOPROMPT);
+        if (estStroka(kod)) {
+            podklyucheno_ = true;
+            logStroka("Подключение к SQL Server, база OtpuskKompanii, сервер " + server
+                      + ", драйвер " + vUtf8(draiver));
+            return true;
+        }
+        const bool netDraivera = draiverNeUstanovlen(soedinenie_);
+        proverit(kod, SQL_HANDLE_DBC, soedinenie_, "вход в базу");
+        if (!netDraivera) break;
     }
 
-    podklyucheno_ = true;
-    logStroka("Подключение к SQL Server, база OtpuskKompanii, сервер " + server);
-    return true;
+    otklyuchit();
+    return false;
 }
 
 void SqlHranilishche::otklyuchit() {
@@ -329,12 +387,14 @@ bool SqlHranilishche::udalitOtpusk(int id) {
 }
 
 std::string serverIzNastroek() {
-    std::ifstream fail("server.txt");
-    std::string stroka;
-    if (std::getline(fail, stroka)) {
-        if (stroka.rfind("\xEF\xBB\xBF", 0) == 0) stroka.erase(0, 3);
-        while (!stroka.empty() && (stroka.back() == '\r' || stroka.back() == ' ')) stroka.pop_back();
-        if (!stroka.empty() && stroka.find(';') == std::string::npos) return stroka;
+    std::string server = serverIzFaila("server.txt");
+    if (!server.empty()) return server;
+
+    // Программу можно запускать и из корня проекта, и двойным щелчком из build.
+    std::string papka = papkaProgrammy();
+    if (!papka.empty()) {
+        server = serverIzFaila(papka + "\\server.txt");
+        if (!server.empty()) return server;
     }
-    return "lpc:localhost";
+    return "localhost";
 }

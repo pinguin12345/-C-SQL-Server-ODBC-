@@ -43,5 +43,6 @@ private:
     std::string oshibka_;
 };
 
-// Первая строка server.txt или lpc:localhost, если файла нет.
+// Первая строка server.txt из текущей папки или рядом с exe.
+// Если файла нет, возвращает localhost.
 std::string serverIzNastroek();

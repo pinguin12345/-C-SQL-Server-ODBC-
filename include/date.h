@@ -4,6 +4,9 @@
 
 
 
+// true, если строка — существующая дата в формате ДД.ММ.ГГГГ.
+bool dataHoroshaya(const std::string& s);
+
 // Календарные дни от начала до конца включительно, -1 если даты неверные.
 int skolkoDney(const std::string& nach, const std::string& kon);
 
